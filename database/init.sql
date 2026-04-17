@@ -1,0 +1,2 @@
+-- Creates tables on the first boot.
+-- TODO: Create sales_fact table and dimension tables.
