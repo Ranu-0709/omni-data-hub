@@ -1,32 +1,32 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import ChartCard from "@/components/cards/ChartCard";
 import CategoriesCharts from "./CategoriesCharts";
 
 async function getData() {
-  const byCategory = await sql`
+  const byCategory = await pool.query(`
     SELECT category,
            SUM(total_revenue) as revenue,
            SUM(total_units) as units,
            SUM(total_returns) as returns
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY category ORDER BY revenue DESC`;
+    GROUP BY category ORDER BY revenue DESC`);
 
-  const returnsByFranchise = await sql`
+  const returnsByFranchise = await pool.query(`
     SELECT category,
            SUM(CASE WHEN franchise_id='A' THEN total_returns ELSE 0 END) as "franchiseA",
            SUM(CASE WHEN franchise_id='B' THEN total_returns ELSE 0 END) as "franchiseB"
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY category ORDER BY category`;
+    GROUP BY category ORDER BY category`);
 
-  const byBrand = await sql`
+  const byBrand = await pool.query(`
     SELECT brand, category,
            SUM(total_revenue) as revenue
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
     GROUP BY brand, category
-    ORDER BY revenue DESC LIMIT 30`;
+    ORDER BY revenue DESC LIMIT 30`);
 
   return { byCategory: byCategory.rows, returnsByFranchise: returnsByFranchise.rows, byBrand: byBrand.rows };
 }

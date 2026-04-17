@@ -1,4 +1,9 @@
-import { sql } from "@vercel/postgres";
+import pkg from "pg";
+const { Pool } = pkg;
+
+const pool = new Pool({
+  connectionString: process.env.POSTGRES_URL,
+});
 
 const CITIES = [
   { city: "Bengaluru", state: "KA" }, { city: "Mumbai", state: "MH" },
@@ -41,7 +46,7 @@ function dateStr(daysAgo: number): string {
 
 async function seed() {
   console.log("Clearing existing data...");
-  await sql`TRUNCATE summary_revenue_daily, summary_top_products, summary_store_hub, summary_loyalty, meta_last_sync RESTART IDENTITY`;
+  await pool.query(`TRUNCATE summary_revenue_daily, summary_top_products, summary_store_hub, summary_loyalty, meta_last_sync RESTART IDENTITY`);
 
   // --- summary_revenue_daily: 30 days × 10 cities × 2 franchises × categories ---
   console.log("Seeding summary_revenue_daily...");
@@ -61,9 +66,9 @@ async function seed() {
           const revenue = units * avgPrice;
           const returnRev = returns * avgPrice;
 
-          await sql`
+          await pool.query(`
             INSERT INTO summary_revenue_daily (date, franchise_id, city, state, category, sub_category, brand, total_revenue, total_units, total_returns, return_revenue)
-            VALUES (${date}, ${franchise}, ${city}, ${state}, ${category}, ${sub}, ${brand}, ${revenue}, ${units}, ${returns}, ${returnRev})`;
+            VALUES (${date}, ${franchise}, ${city}, ${state}, ${category}, ${sub}, ${brand}, ${revenue}, ${units}, ${returns}, ${returnRev})`);
         }
       }
     }
@@ -83,9 +88,9 @@ async function seed() {
       const hindiNames = [`${name} शानदार`, `${name} राजशाही`, `${name} देशी`];
       const productName = Math.random() < 0.15 ? pick(hindiNames) : name;
 
-      await sql`
+      await pool.query(`
         INSERT INTO summary_top_products (period, period_start, sku_code, product_name, brand, category, size, color, fabric, units_sold, revenue)
-        VALUES ('weekly', ${periodStart}, ${"SKU-" + String(rand(1, 9999)).padStart(4, "0")}, ${productName}, ${pick(BRANDS)}, ${category}, ${pick(SIZES)}, ${pick(COLORS)}, ${pick(FABRICS)}, ${units}, ${revenue})`;
+        VALUES ('weekly', ${periodStart}, ${"SKU-" + String(rand(1, 9999)).padStart(4, "0")}, ${productName}, ${pick(BRANDS)}, ${category}, ${pick(SIZES)}, ${pick(COLORS)}, ${pick(FABRICS)}, ${units}, ${revenue})`);
     }
   }
 
@@ -103,18 +108,18 @@ async function seed() {
       const { city } = pick(CITIES);
       const units = rand(20, 300);
       const returns = rand(0, Math.floor(units * 0.1));
-      await sql`
+      await pool.query(`
         INSERT INTO summary_store_hub (date, franchise_id, location_code, location_name, city, total_revenue, total_units, total_returns)
-        VALUES (${date}, 'A', ${"FA-" + String(s).padStart(3, "0")}, ${storeNames[s - 1]}, ${city}, ${units * rand(599, 3999)}, ${units}, ${returns})`;
+        VALUES (${date}, 'A', ${"FA-" + String(s).padStart(3, "0")}, ${storeNames[s - 1]}, ${city}, ${units * rand(599, 3999)}, ${units}, ${returns})`);
     }
     // Franchise B hubs
     for (let h = 1; h <= 15; h++) {
       const { city } = pick(CITIES);
       const units = rand(50, 800);
       const returns = rand(0, Math.floor(units * 0.12));
-      await sql`
+      await pool.query(`
         INSERT INTO summary_store_hub (date, franchise_id, location_code, location_name, city, total_revenue, total_units, total_returns)
-        VALUES (${date}, 'B', ${"HUB-" + String(h).padStart(3, "0")}, ${"Hub-" + city}, ${city}, ${units * rand(399, 2999)}, ${units}, ${returns})`;
+        VALUES (${date}, 'B', ${"HUB-" + String(h).padStart(3, "0")}, ${"Hub-" + city}, ${city}, ${units * rand(399, 2999)}, ${units}, ${returns})`);
     }
   }
 
@@ -127,14 +132,14 @@ async function seed() {
       const units = isWalkin ? rand(200, 800) : rand(30, 400);
       const customers = isWalkin ? rand(150, 600) : rand(10, 200);
       const revenue = units * rand(699, 4999);
-      await sql`
+      await pool.query(`
         INSERT INTO summary_loyalty (date, loyalty_tier, total_revenue, total_units, customer_count)
-        VALUES (${date}, ${tier}, ${revenue}, ${units}, ${customers})`;
+        VALUES (${date}, ${tier}, ${revenue}, ${units}, ${customers})`);
     }
   }
 
   // --- meta_last_sync ---
-  await sql`INSERT INTO meta_last_sync (source, rows_synced) VALUES ('seed', 5000)`;
+  await pool.query(`INSERT INTO meta_last_sync (source, rows_synced) VALUES ('seed', 5000)`);
 
   console.log("Seed complete.");
 }

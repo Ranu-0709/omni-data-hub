@@ -1,11 +1,11 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
   const franchise = req.nextUrl.searchParams.get("franchise") || "A";
   const limit = parseInt(req.nextUrl.searchParams.get("limit") || "10");
 
-  const topLocations = await sql`
+  const topLocations = await pool.query(`
     SELECT location_code, location_name, city,
            SUM(total_revenue) as revenue,
            SUM(total_units) as units,
@@ -15,9 +15,9 @@ export async function GET(req: NextRequest) {
       AND date >= CURRENT_DATE - INTERVAL '30 days'
     GROUP BY location_code, location_name, city
     ORDER BY revenue DESC
-    LIMIT ${limit}`;
+    LIMIT ${limit}`);
 
-  const topCities = await sql`
+  const topCities = await pool.query(`
     SELECT city,
            SUM(total_revenue) as revenue,
            SUM(total_units) as units,
@@ -26,16 +26,16 @@ export async function GET(req: NextRequest) {
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
     GROUP BY city
     ORDER BY revenue DESC
-    LIMIT 10`;
+    LIMIT 10`);
 
-  const franchiseComparison = await sql`
+  const franchiseComparison = await pool.query(`
     SELECT franchise_id,
            SUM(total_revenue) as revenue,
            SUM(total_units) as units,
            SUM(total_returns) as returns
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY franchise_id`;
+    GROUP BY franchise_id`);
 
   return NextResponse.json({
     topLocations: topLocations.rows,

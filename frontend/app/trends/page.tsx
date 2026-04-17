@@ -1,22 +1,22 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import ChartCard from "@/components/cards/ChartCard";
 import TrendsCharts from "./TrendsCharts";
 
 async function getData() {
-  const topSizes = await sql`
+  const topSizes = await pool.query(`
     SELECT size as name, SUM(units_sold) as units
     FROM summary_top_products WHERE period='weekly' AND size IS NOT NULL
-    GROUP BY size ORDER BY units DESC LIMIT 10`;
+    GROUP BY size ORDER BY units DESC LIMIT 10`);
 
-  const topColors = await sql`
+  const topColors = await pool.query(`
     SELECT color as name, SUM(units_sold) as units
     FROM summary_top_products WHERE period='weekly' AND color IS NOT NULL
-    GROUP BY color ORDER BY units DESC LIMIT 10`;
+    GROUP BY color ORDER BY units DESC LIMIT 10`);
 
-  const fabricMix = await sql`
+  const fabricMix = await pool.query(`
     SELECT fabric as name, SUM(revenue) as value
     FROM summary_top_products WHERE period='weekly' AND fabric IS NOT NULL
-    GROUP BY fabric ORDER BY value DESC`;
+    GROUP BY fabric ORDER BY value DESC`);
 
   return { topSizes: topSizes.rows, topColors: topColors.rows, fabricMix: fabricMix.rows };
 }

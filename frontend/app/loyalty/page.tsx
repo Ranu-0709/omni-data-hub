@@ -1,24 +1,24 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import ChartCard from "@/components/cards/ChartCard";
 import LoyaltyCharts from "./LoyaltyCharts";
 
 async function getData() {
-  const tierBreakdown = await sql`
+  const tierBreakdown = await pool.query(`
     SELECT loyalty_tier as name, SUM(total_revenue) as value
     FROM summary_loyalty WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY loyalty_tier ORDER BY value DESC`;
+    GROUP BY loyalty_tier ORDER BY value DESC`);
 
-  const trend = await sql`
+  const trend = await pool.query(`
     SELECT date::text,
            SUM(CASE WHEN loyalty_tier != 'Walk-in' THEN total_revenue ELSE 0 END) as "loyalty",
            SUM(CASE WHEN loyalty_tier = 'Walk-in' THEN total_revenue ELSE 0 END) as "walkIn"
     FROM summary_loyalty WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY date ORDER BY date`;
+    GROUP BY date ORDER BY date`);
 
-  const tierRevenue = await sql`
+  const tierRevenue = await pool.query(`
     SELECT loyalty_tier as name, SUM(total_revenue) as revenue
     FROM summary_loyalty WHERE date >= CURRENT_DATE - INTERVAL '30 days' AND loyalty_tier != 'Walk-in'
-    GROUP BY loyalty_tier ORDER BY revenue DESC`;
+    GROUP BY loyalty_tier ORDER BY revenue DESC`);
 
   return { tierBreakdown: tierBreakdown.rows, trend: trend.rows, tierRevenue: tierRevenue.rows };
 }

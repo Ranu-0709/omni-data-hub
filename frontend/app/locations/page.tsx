@@ -1,29 +1,29 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import KpiCard from "@/components/cards/KpiCard";
 import ChartCard from "@/components/cards/ChartCard";
 import LocationsCharts from "./LocationsCharts";
 
 async function getData() {
-  const topStores = await sql`
+  const topStores = await pool.query(`
     SELECT location_name as name, SUM(total_revenue) as revenue
     FROM summary_store_hub WHERE franchise_id='A' AND date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY location_name ORDER BY revenue DESC LIMIT 10`;
+    GROUP BY location_name ORDER BY revenue DESC LIMIT 10`);
 
-  const topHubs = await sql`
+  const topHubs = await pool.query(`
     SELECT location_name as name, SUM(total_revenue) as revenue
     FROM summary_store_hub WHERE franchise_id='B' AND date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY location_name ORDER BY revenue DESC LIMIT 10`;
+    GROUP BY location_name ORDER BY revenue DESC LIMIT 10`);
 
-  const topCities = await sql`
+  const topCities = await pool.query(`
     SELECT city, SUM(total_revenue) as revenue, SUM(total_units) as units, SUM(total_returns) as returns
     FROM summary_revenue_daily WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY city ORDER BY revenue DESC LIMIT 10`;
+    GROUP BY city ORDER BY revenue DESC LIMIT 10`);
 
-  const comparison = await sql`
+  const comparison = await pool.query(`
     SELECT franchise_id, SUM(total_revenue) as revenue, SUM(total_units) as units, SUM(total_returns) as returns
     FROM summary_revenue_daily WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY franchise_id`;
+    GROUP BY franchise_id`);
 
   return { topStores: topStores.rows, topHubs: topHubs.rows, topCities: topCities.rows, comparison: comparison.rows };
 }

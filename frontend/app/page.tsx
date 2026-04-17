@@ -1,42 +1,42 @@
-import { sql } from "@/lib/db";
+import { pool } from "@/lib/db";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import KpiCard from "@/components/cards/KpiCard";
 import ChartCard from "@/components/cards/ChartCard";
 import OverviewCharts from "./OverviewCharts";
 
 async function getData() {
-  const thisWeek = await sql`
+  const thisWeek = await pool.query(`
     SELECT franchise_id,
            COALESCE(SUM(total_revenue),0) as revenue,
            COALESCE(SUM(total_units),0) as units,
            COALESCE(SUM(total_returns),0) as returns
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '7 days'
-    GROUP BY franchise_id`;
+    GROUP BY franchise_id`);
 
-  const lastWeek = await sql`
+  const lastWeek = await pool.query(`
     SELECT franchise_id,
            COALESCE(SUM(total_revenue),0) as revenue
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '14 days'
       AND date < CURRENT_DATE - INTERVAL '7 days'
-    GROUP BY franchise_id`;
+    GROUP BY franchise_id`);
 
-  const trend = await sql`
+  const trend = await pool.query(`
     SELECT date::text,
            SUM(CASE WHEN franchise_id='A' THEN total_revenue ELSE 0 END) as "franchiseA",
            SUM(CASE WHEN franchise_id='B' THEN total_revenue ELSE 0 END) as "franchiseB"
     FROM summary_revenue_daily
     WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-    GROUP BY date ORDER BY date`;
+    GROUP BY date ORDER BY date`);
 
-  const totals = await sql`
+  const totals = await pool.query(`
     SELECT COALESCE(SUM(total_units),0) as total_sales,
            COALESCE(SUM(total_returns),0) as total_returns
     FROM summary_revenue_daily
-    WHERE date >= CURRENT_DATE - INTERVAL '30 days'`;
+    WHERE date >= CURRENT_DATE - INTERVAL '30 days'`);
 
-  const meta = await sql`SELECT synced_at, source FROM meta_last_sync ORDER BY synced_at DESC LIMIT 1`;
+  const meta = await pool.query(`SELECT synced_at, source FROM meta_last_sync ORDER BY synced_at DESC LIMIT 1`);
 
   return { thisWeek: thisWeek.rows, lastWeek: lastWeek.rows, trend: trend.rows, totals: totals.rows[0], meta: meta.rows[0] };
 }
