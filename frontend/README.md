@@ -55,6 +55,8 @@ git push -u origin main
 3. Select the `omni-data-hub` repo
 4. **Configure the project:**
 
+#making update in readme
+
 | Setting | Value |
 |---|---|
 | Framework Preset | Next.js |
