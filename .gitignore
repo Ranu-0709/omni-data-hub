@@ -9,6 +9,7 @@ venv/
 .env.*.local
 
 # Generated data — do not push
+database/data/
 storage/
 data_generator/storage/
 *.csv
