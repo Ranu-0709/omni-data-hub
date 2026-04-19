@@ -28,14 +28,30 @@ fake_hi = Faker('hi_IN')
 HINDI_PCT = 0.15               # ~15% of names/labels will be in Hindi
 
 # ──────────────────── CONSTANTS ────────────────────
-ROWS_FRANCHISE_A = 50_000_000       # Total historical sales rows
-ROWS_FRANCHISE_B = 250_000_000      # Total historical sales rows (~1-2 GB per monthly file)
+RANDOMIZE_PCT = 10                 # ±% jitter applied to base counts
+
+def _jitter(base, pct=RANDOMIZE_PCT):
+    """Return base ±pct% as int (min 1)."""
+    return max(1, int(base * random.uniform(1 - pct / 100, 1 + pct / 100)))
+
+# Base counts — actual runtime values are jittered ±RANDOMIZE_PCT %
+_BASE_ROWS_FRANCHISE_A = 1_000     # 50_000_000
+_BASE_ROWS_FRANCHISE_B = 5_000     # 250_000_000
+_BASE_STORE_COUNT_A = 10
+_BASE_HUB_COUNT_B = 500
+_BASE_MASTER_SKU_COUNT = 10_000
+_BASE_LOYALTY_CUSTOMER_COUNT = 5_000
+
+ROWS_FRANCHISE_A = _jitter(_BASE_ROWS_FRANCHISE_A)
+ROWS_FRANCHISE_B = _jitter(_BASE_ROWS_FRANCHISE_B)
+STORE_COUNT_A = _jitter(_BASE_STORE_COUNT_A)
+HUB_COUNT_B = _jitter(_BASE_HUB_COUNT_B)
+MASTER_SKU_COUNT = _jitter(_BASE_MASTER_SKU_COUNT)
+LOYALTY_CUSTOMER_COUNT = _jitter(_BASE_LOYALTY_CUSTOMER_COUNT)
+
 CHUNK_SIZE = 500_000               # Rows per chunk (controls memory per worker)
 MAX_WORKERS = max(1, cpu_count() - 1)
-MASTER_SKU_COUNT = 10_000
-LOYALTY_CUSTOMER_COUNT = 5_000     # Customers in manufacturer's loyalty program
-STORE_COUNT_A = 10
-HUB_COUNT_B = 500
+
 BARCODE_PER_SKU_MIN = 1            # Min internal barcodes Franchise B creates per SKU
 BARCODE_PER_SKU_MAX = 3            # Max (variants/pack sizes get separate barcodes)
 ROWS_VARIANCE_PCT = 30             # ±% variance in rows per month
@@ -48,15 +64,68 @@ INDIA_LAT_MIN, INDIA_LAT_MAX = 8.0, 35.0
 INDIA_LON_MIN, INDIA_LON_MAX = 68.0, 97.0
 
 INDIA_CITIES = [
-    ("Bengaluru", "KA"), ("Mysuru", "KA"),
-    ("Mumbai", "MH"), ("Pune", "MH"), ("Nagpur", "MH"),
-    ("Delhi", "DL"), ("Noida", "UP"), ("Lucknow", "UP"),
-    ("Chennai", "TN"), ("Coimbatore", "TN"),
-    ("Kolkata", "WB"), ("Hyderabad", "TS"),
-    ("Ahmedabad", "GJ"), ("Jaipur", "RJ"),
-    ("Kochi", "KL"), ("Bhopal", "MP"),
-    ("Patna", "BR"), ("Chandigarh", "CH"),
-    ("Guwahati", "AS"), ("Indore", "MP"),
+    # Karnataka
+    ("Bengaluru", "KA"), ("Mysuru", "KA"), ("Hubli", "KA"), ("Mangaluru", "KA"), ("Belgaum", "KA"),
+    # Maharashtra
+    ("Mumbai", "MH"), ("Pune", "MH"), ("Nagpur", "MH"), ("Nashik", "MH"), ("Aurangabad", "MH"),
+    ("Thane", "MH"), ("Solapur", "MH"), ("Kolhapur", "MH"), ("Navi Mumbai", "MH"),
+    # Delhi / NCR
+    ("Delhi", "DL"), ("New Delhi", "DL"),
+    # Uttar Pradesh
+    ("Noida", "UP"), ("Lucknow", "UP"), ("Kanpur", "UP"), ("Agra", "UP"), ("Varanasi", "UP"),
+    ("Prayagraj", "UP"), ("Meerut", "UP"), ("Ghaziabad", "UP"), ("Bareilly", "UP"), ("Aligarh", "UP"),
+    # Tamil Nadu
+    ("Chennai", "TN"), ("Coimbatore", "TN"), ("Madurai", "TN"), ("Tiruchirappalli", "TN"),
+    ("Salem", "TN"), ("Tirunelveli", "TN"), ("Vellore", "TN"),
+    # West Bengal
+    ("Kolkata", "WB"), ("Howrah", "WB"), ("Durgapur", "WB"), ("Siliguri", "WB"), ("Asansol", "WB"),
+    # Telangana
+    ("Hyderabad", "TS"), ("Warangal", "TS"), ("Nizamabad", "TS"), ("Karimnagar", "TS"),
+    # Gujarat
+    ("Ahmedabad", "GJ"), ("Surat", "GJ"), ("Vadodara", "GJ"), ("Rajkot", "GJ"), ("Gandhinagar", "GJ"),
+    ("Bhavnagar", "GJ"), ("Junagadh", "GJ"),
+    # Rajasthan
+    ("Jaipur", "RJ"), ("Jodhpur", "RJ"), ("Udaipur", "RJ"), ("Kota", "RJ"), ("Ajmer", "RJ"),
+    ("Bikaner", "RJ"),
+    # Kerala
+    ("Kochi", "KL"), ("Thiruvananthapuram", "KL"), ("Kozhikode", "KL"), ("Thrissur", "KL"),
+    # Madhya Pradesh
+    ("Bhopal", "MP"), ("Indore", "MP"), ("Gwalior", "MP"), ("Jabalpur", "MP"), ("Ujjain", "MP"),
+    # Bihar
+    ("Patna", "BR"), ("Gaya", "BR"), ("Muzaffarpur", "BR"), ("Bhagalpur", "BR"),
+    # Punjab
+    ("Ludhiana", "PB"), ("Amritsar", "PB"), ("Jalandhar", "PB"), ("Patiala", "PB"),
+    # Haryana
+    ("Gurugram", "HR"), ("Faridabad", "HR"), ("Panipat", "HR"), ("Ambala", "HR"), ("Karnal", "HR"),
+    # Chandigarh
+    ("Chandigarh", "CH"),
+    # Assam
+    ("Guwahati", "AS"), ("Dibrugarh", "AS"), ("Jorhat", "AS"),
+    # Odisha
+    ("Bhubaneswar", "OD"), ("Cuttack", "OD"), ("Rourkela", "OD"),
+    # Jharkhand
+    ("Ranchi", "JH"), ("Jamshedpur", "JH"), ("Dhanbad", "JH"), ("Bokaro", "JH"),
+    # Chhattisgarh
+    ("Raipur", "CG"), ("Bhilai", "CG"), ("Bilaspur", "CG"),
+    # Andhra Pradesh
+    ("Visakhapatnam", "AP"), ("Vijayawada", "AP"), ("Guntur", "AP"), ("Tirupati", "AP"),
+    ("Nellore", "AP"), ("Kakinada", "AP"),
+    # Uttarakhand
+    ("Dehradun", "UK"), ("Haridwar", "UK"),
+    # Goa
+    ("Panaji", "GA"), ("Margao", "GA"),
+    # Jammu & Kashmir
+    ("Srinagar", "JK"), ("Jammu", "JK"),
+    # Himachal Pradesh
+    ("Shimla", "HP"), ("Dharamshala", "HP"),
+    # Tripura
+    ("Agartala", "TR"),
+    # Meghalaya
+    ("Shillong", "ML"),
+    # Manipur
+    ("Imphal", "MN"),
+    # Puducherry
+    ("Puducherry", "PY"),
 ]
 
 # Product taxonomy (Indian garment manufacturer)
@@ -109,7 +178,7 @@ OUTPUT_DIR_A = os.path.join("storage", "landing_zone", "franchise_a")
 OUTPUT_DIR_B = os.path.join("storage", "landing_zone", "franchise_b")
 # ───────────────────────────────────────────────────
 
-# Pre-compute lookup arrays
+# Pre-compute lookup arrays (derived from jittered counts)
 _sku_codes = np.array([f"SKU-{i:04d}" for i in range(1, MASTER_SKU_COUNT + 1)])
 _store_codes = np.array([f"FA-{i:03d}" for i in range(1, STORE_COUNT_A + 1)])
 _hub_ids = np.array([str(uuid.uuid4())[:8] for _ in range(HUB_COUNT_B)])
@@ -419,7 +488,12 @@ def generate_sales_b():
 if __name__ == "__main__":
     t_start = time.time()
 
-    print("=== SEED: Master Company Data ===")
+    print(f"=== Jittered counts (±{RANDOMIZE_PCT}%) ===")
+    print(f"  SKUs={MASTER_SKU_COUNT:,}  Loyalty={LOYALTY_CUSTOMER_COUNT:,}  "
+          f"Stores={STORE_COUNT_A}  Hubs={HUB_COUNT_B}  "
+          f"Rows_A={ROWS_FRANCHISE_A:,}  Rows_B={ROWS_FRANCHISE_B:,}")
+
+    print("\n=== SEED: Master Company Data ===")
     os.makedirs(OUTPUT_DIR_MASTER, exist_ok=True)
     os.makedirs(OUTPUT_DIR_A, exist_ok=True)
     os.makedirs(OUTPUT_DIR_B, exist_ok=True)

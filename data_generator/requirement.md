@@ -193,18 +193,22 @@ One SKU can have 1–3 internal barcodes (different size-color combos in warehou
 | Row variance | ±30% per run | ±30% per file |
 
 ### Master Data Volumes
-| Master | Count |
-|---|---|
-| Products (SKUs) | 10,000 |
-| Loyalty customers | 5,000 |
-| Stores (Franchise A) | 10 (seed), +1 per refresh |
-| Hubs (Franchise B) | 500 (seed), +2 per refresh |
-| Barcode mappings | ~15,000–30,000 (1–3 per SKU) |
+
+All base counts are jittered ±`RANDOMIZE_PCT` (default 10%) at startup.
+
+| Master | Base Count | Runtime Range |
+|---|---|---|
+| Products (SKUs) | 10,000 | ~9,000–11,000 |
+| Loyalty customers | 5,000 | ~4,500–5,500 |
+| Stores (Franchise A) | 10 (seed), +1 per refresh | ~9–11 |
+| Hubs (Franchise B) | 500 (seed), +2 per refresh | ~450–550 |
+| Barcode mappings | ~15,000–30,000 (1–3 per SKU) | Scales with SKU count |
 
 ### Randomisation Controls
 | Constant | Purpose | Default |
 |---|---|---|
 | `ROWS_VARIANCE_PCT` | ±% variance in row count per file | 30 |
+| `RANDOMIZE_PCT` | ±% jitter on base counts per run | 10 |
 | `LOYALTY_BLANK_MAX_PCT` | Max % of blank customer IDs | 0.21 |
 | `LOYALTY_VARIANCE_PCT` | How much blank rate swings below max | 20–100 |
 | `ERROR_PCT` | Fraction of rows with injected errors | 0.005 |

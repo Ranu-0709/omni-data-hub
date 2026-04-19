@@ -50,9 +50,11 @@ python SeedDataGenerator.py
 ```
 
 Generates:
-- **Master company:** `product_master.csv` (10K garment SKUs with size/color/fabric), `customer_master.csv` (5K loyalty customers)
-- **Franchise A:** store master + 12 monthly sales CSVs (50M rows total)
-- **Franchise B:** hub master + barcode-SKU mapping + 12 monthly sales PSVs (250M rows total)
+- **Master company:** `product_master.csv` (~10K garment SKUs with size/color/fabric), `customer_master.csv` (~5K loyalty customers)
+- **Franchise A:** store master + 12 monthly sales CSVs (~50M rows total)
+- **Franchise B:** hub master + barcode-SKU mapping + 12 monthly sales PSVs (~250M rows total)
+
+All counts are jittered ±10% per run (`RANDOMIZE_PCT`) for realistic variation.
 
 ### 2. Refresh (run on schedule — requires seed masters)
 
@@ -73,13 +75,19 @@ Set `REFRESH_START_DATE` at the top of the file before each run.
 All tunables are constants at the top of each file.
 
 ### Volume & Dates
+
+Base counts are jittered ±`RANDOMIZE_PCT` (default 10%) at startup, so each run produces slightly different dataset sizes.
+
 | Constant | Seed Default | Refresh Default | Description |
 |---|---|---|---|
+| `RANDOMIZE_PCT` | 10 | 10 | ±% jitter applied to all base counts below |
 | `ROWS_FRANCHISE_A` | 50,000,000 | 500,000 | Total / base row count |
 | `ROWS_FRANCHISE_B` | 250,000,000 | 150,000/day | Total / base row count |
-| `ROWS_VARIANCE_PCT` | 30 | 30 | ±% randomisation per file |
+| `ROWS_VARIANCE_PCT` | 30 | 30 | ±% randomisation per file (stacks with jitter) |
 | `MASTER_SKU_COUNT` | 10,000 | — | Garment SKUs in catalog |
 | `LOYALTY_CUSTOMER_COUNT` | 5,000 | — | Customers in loyalty program |
+| `STORE_COUNT_A` | 10 | 10 | Franchise A stores |
+| `HUB_COUNT_B` | 500 | 500 | Franchise B hubs |
 
 ### Data Quality
 | Constant | Default | Description |
