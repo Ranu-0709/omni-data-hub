@@ -1,0 +1,10 @@
+# Data Manipulation
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Visualization
+matplotlib
+seaborn
+
+# Environment
+notebook
