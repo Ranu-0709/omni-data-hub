@@ -1,0 +1,21 @@
+# Omni Data Hub — Pipeline Dependencies
+# Install inside the Airflow container or local venv:
+#   pip install -r pipeline/requirements.txt
+
+# apache-airflow==2.6.0
+# pandas>=2.1.0,<3.0
+# numpy>=1.23,<2.0
+# sqlalchemy>=2.0.0,<3.0
+# psycopg2-binary>=2.9
+# python-dotenv>=1.0
+
+
+# Omni Data Hub — Pipeline Dependencies
+# Optimized for Airflow 2.6.0 and SQLAlchemy 1.4 Compatibility
+
+apache-airflow==2.6.0
+pandas>=1.5.0,<2.2.0
+numpy>=1.23,<2.0
+sqlalchemy>=1.4.0,<1.5.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0

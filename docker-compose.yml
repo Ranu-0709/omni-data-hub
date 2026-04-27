@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # The central warehouse
   postgres:
     image: postgres:13
     container_name: omni_db
@@ -11,17 +10,18 @@ services:
       POSTGRES_DB: omnihub
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
-      # ---> THIS IS THE NEW LINE FOR PERSISTENCE <---
       - ./database/data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    networks:
+      - omni_network  # <--- Step 1: Put Postgres on the network
 
-  # The factory manager
   airflow:
     image: apache/airflow:2.6.0
     container_name: omni_airflow
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      # Note: We keep "postgres" here because that is the service name above
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:password@postgres/omnihub
     volumes:
       - ./pipeline/dags:/opt/airflow/dags
@@ -30,9 +30,10 @@ services:
       - "8081:8080"
     depends_on:
       - postgres
+    networks:
+      - omni_network  # <--- Step 2: Put Airflow on the same network
     command: webserver
 
-  # The admin kitchen window (Runs on GCP)
   frontend_admin:
     build: ./frontend-admin
     container_name: omni_admin_ui
@@ -40,3 +41,10 @@ services:
       - "80:3000"
     depends_on:
       - postgres
+    networks:
+      - omni_network
+
+# Step 3: Define the network at the bottom
+networks:
+  omni_network:
+    driver: bridge
