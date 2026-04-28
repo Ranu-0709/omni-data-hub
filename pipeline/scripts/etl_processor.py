@@ -10,7 +10,7 @@ import json
 import logging
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # ── Config ──────────────────────────────────────
 
@@ -73,6 +73,181 @@ def load_dim_product(engine):
             "sub_category", "size", "color", "fabric", "mrp", "hsn_code", "gst_pct"]
     upsert_df(df[cols], "dim_product", "sku_code", engine)
 
+
+
+
+def load_dim_customer(engine):
+    path = os.path.join(LANDING, "master_company", "customer_master.csv")
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    upsert_df(df, "dim_customer", "customer_id", engine)
+
+
+def load_dim_store(engine):
+    path = os.path.join(LANDING, "franchise_a", "storemaster_monthly_refresh.csv")
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    upsert_df(df, "dim_store", "store_code", engine)
+
+
+def load_dim_hub(engine):
+    path = os.path.join(LANDING, "franchise_b", "hubmaster_weekly_refresh.psv")
+    df = pd.read_csv(path, sep="|", encoding="utf-8-sig")
+    upsert_df(df, "dim_hub", "hub_id", engine)
+
+
+def load_dim_date(engine):
+    """Populate calendar dimension for FY 25-26 + buffer."""
+    dates = pd.date_range("2025-01-01", "2027-03-31")
+    df = pd.DataFrame({
+        "date_key": dates,
+        "year": dates.year,
+        "month": dates.month,
+        "day": dates.day,
+        "quarter": dates.quarter,
+        "day_of_week": dates.dayofweek,
+        "month_name": dates.strftime("%B"),
+        "is_weekend": dates.dayofweek >= 5,
+    })
+    upsert_df(df, "dim_date", "date_key", engine)
+
+
+# ── Franchise A ETL ─────────────────────────────
+
+def _already_loaded(source_file: str, engine) -> bool:
+    result = engine.execute(
+        text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1"),
+        {"f": source_file},
+    )
+    return result.fetchone() is not None
+
+
+def process_franchise_a(engine):
+    log.info("=== Franchise A ===")
+    
+    # --- 1. INITIALIZATION (Crucial Fix) ---
+    # We force-create the table schema if it's missing BEFORE the loop starts.
+    # This ensures the 'SELECT 1 FROM sales_fact' query doesn't crash on the first run.
+    pd.DataFrame(columns=[
+        "franchise_id", "transaction_date", "sku_code", "store_or_hub_id",
+        "quantity", "selling_price", "customer_id", "status", "source_file"
+    ]).to_sql("sales_fact", engine, if_exists="append", index=False)
+
+    valid_skus = set(pd.read_sql("SELECT sku_code FROM dim_product", engine)["sku_code"])
+    now = pd.Timestamp.now()
+
+    files = sorted(glob.glob(os.path.join(LANDING, "franchise_a", "sales_*.csv")))
+    
+    for fpath in files:
+        fname = os.path.basename(fpath)
+        with engine.connect() as conn:
+            # This query now works because the table was initialized above
+            check_sql = text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1")
+            if conn.execute(check_sql, {"f": fname}).fetchone():
+                log.info(f"   SKIP (already loaded): {fname}")
+                continue
+
+        df = pd.read_csv(fpath, encoding="utf-8-sig")
+        # Numeric conversion to prevent TypeError
+        df["unit_price"] = pd.to_numeric(df["unit_price"], errors='coerce')
+        df["quantity"] = pd.to_numeric(df["quantity"], errors='coerce')
+
+        #df["transaction_timestamp"] = pd.to_datetime(df["transaction_timestamp"])
+        df["transaction_timestamp"] = pd.to_datetime(df["transaction_timestamp"], errors='coerce')
+        initial = len(df)
+
+        # Quarantine Logic
+        
+        df = quarantine(df, df["unit_price"].isna() | (df["unit_price"] <= 0), "A1", "A", fname, engine)
+        df = quarantine(df, df["quantity"].abs() > 100, "A2", "A", fname, engine)
+        #df = quarantine(df, df["transaction_timestamp"] > now, "A3", "A", fname, engine)
+        df = quarantine(df, df["transaction_timestamp"].isna(), "A0", "A", fname, engine)
+        df = quarantine(df, ~df["sku_code"].isin(valid_skus), "A4", "A", fname, engine)
+
+        # Map to fact schema
+        fact = pd.DataFrame({
+            "franchise_id": "A",
+            "transaction_date": df["transaction_timestamp"],
+            "sku_code": df["sku_code"],
+            "store_or_hub_id": df["store_code"],
+            "quantity": df["quantity"],
+            "selling_price": df["unit_price"],
+            "customer_id": df["customer_id"].replace("", None),
+            "status": df["transaction_type"],
+            "source_file": fname,
+        })
+        
+        fact.to_sql("sales_fact", engine, if_exists="append", index=False, method="multi")
+        log.info(f"   {fname}: {len(fact)} loaded / {initial - len(fact)} quarantined")
+
+# ── Franchise B ETL ─────────────────────────────
+
+def process_franchise_b(engine):
+    log.info("=== Franchise B ===")
+
+    # Load barcode mapping
+    map_path = os.path.join(LANDING, "franchise_b", "barcode_sku_mapping.psv")
+    if not os.path.exists(map_path):
+        log.warning(f"Barcode map not found: {map_path}")
+        return
+        
+    bmap = pd.read_csv(map_path, sep="|", encoding="utf-8-sig")
+    active_barcodes = set(bmap.loc[bmap["is_active"] == 1, "item_barcode"])
+    barcode_to_sku = bmap.loc[bmap["is_active"] == 1].drop_duplicates("item_barcode").set_index("item_barcode")["sku_code"]
+
+    now = pd.Timestamp.now()
+
+    files = sorted(glob.glob(os.path.join(LANDING, "franchise_b", "sales_*.psv")))
+    for fpath in files:
+        fname = os.path.basename(fpath)
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1"), {"f": fname}).fetchone():
+                log.info(f"   SKIP (already loaded): {fname}")
+                continue
+
+        # Load PSV
+        df = pd.read_csv(fpath, sep="|", encoding="utf-8-sig")
+        
+        # --- NEW: CRITICAL NUMERIC CONVERSIONS ---
+        # This prevents the "TypeError: '<=' not supported between instances of 'str' and 'int'"
+        df["mrp_price"] = pd.to_numeric(df["mrp_price"], errors='coerce')
+        df["discount_applied"] = pd.to_numeric(df["discount_applied"], errors='coerce')
+        df["units_sold"] = pd.to_numeric(df["units_sold"], errors='coerce')
+        # ----------------------------------------
+
+        # Fix Date Error: coerce bad dates to NaT
+        df["delivery_timestamp"] = pd.to_datetime(df["delivery_timestamp"], errors='coerce')
+        
+        initial = len(df)
+
+        # Quarantine Logic
+        # Now these comparisons will work because the data types are numeric
+        df = quarantine(df, df["mrp_price"].isna() | (df["mrp_price"] <= 0), "B1", "B", fname, engine)
+        df = quarantine(df, (df["discount_applied"] < 0) | (df["discount_applied"] > df["mrp_price"]), "B2", "B", fname, engine)
+        df = quarantine(df, df["delivery_timestamp"].isna(), "B0", "B", fname, engine)
+        df = quarantine(df, df.duplicated(subset="order_uuid", keep=False), "B4", "B", fname, engine)
+        df = quarantine(df, ~df["item_barcode"].isin(active_barcodes), "B5", "B", fname, engine)
+
+        # Barcode → SKU mapping
+        df["sku_code"] = df["item_barcode"].map(barcode_to_sku)
+
+        # Net price calculation
+        df["net_price"] = df["mrp_price"] - df["discount_applied"]
+
+        # Map to fact schema
+        fact = pd.DataFrame({
+            "franchise_id": "B",
+            "transaction_date": df["delivery_timestamp"],
+            "sku_code": df["sku_code"],
+            "store_or_hub_id": df["hub_id"],
+            "quantity": df["units_sold"],
+            "selling_price": df["net_price"],
+            "customer_id": None,
+            "status": df["status"],
+            "source_file": fname,
+        })
+        
+        fact.to_sql("sales_fact", engine, if_exists="append", index=False, method="multi")
+        log.info(f"   {fname}: {len(fact)} loaded / {initial - len(fact)} quarantined")
+
 # ── Main ────────────────────────────────────────
 
 def run():
@@ -82,7 +257,20 @@ def run():
     log.info("Loading dimensions...")
     load_dim_product(engine)
     # Add other loaders here (load_dim_customer, etc.) as needed
-    
+    load_dim_customer(engine)
+    load_dim_store(engine)
+    load_dim_hub(engine)
+    load_dim_date(engine)
+
+    log.info("Processing sales...")
+    process_franchise_a(engine)
+    process_franchise_b(engine)
+
+    # Summary
+    with engine.connect() as conn:
+        fact_count = conn.execute(text("SELECT COUNT(*) FROM sales_fact")).scalar()
+        err_count = conn.execute(text("SELECT COUNT(*) FROM error_log")).scalar()
+    log.info(f"=== Done. sales_fact={fact_count:,}  error_log={err_count:,} ===")
     log.info("ETL Cycle Complete.")
 
 if __name__ == "__main__":
