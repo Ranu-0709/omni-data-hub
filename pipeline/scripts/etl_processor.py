@@ -214,8 +214,8 @@ def process_franchise_b(engine):
         # ----------------------------------------
 
         # Fix Date Error: coerce bad dates to NaT
-        df["delivery_timestamp"] = pd.to_datetime(df["delivery_timestamp"], errors='coerce')
-        
+       
+        df["delivery_timestamp"] = pd.to_datetime(df["delivery_timestamp"], format='%Y-%m-%d %H:%M:%S', errors='coerce')
         initial = len(df)
 
         # Quarantine Logic
