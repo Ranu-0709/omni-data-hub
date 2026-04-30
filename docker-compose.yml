@@ -1,3 +1,15 @@
+### Steps to Apply:
+# 1.  **Update the file**: Copy the code above into your `docker-compose.yml`.
+# 2.  **Restart**: Run these in your VM terminal:
+#     ```bash
+#     docker-compose down
+#     docker-compose up -d
+#     ```
+# 3.  **Wait for Initialization**: Give it about 60 seconds. Airflow needs to realize the database is ready and then scan the `./pipeline/dags` folder.
+# 4.  **Refresh your browser**: Go to `http://34.1Since you are using a single-container setup for Airflow on your VM, switching the command to `standalone` is the "magic trick" that will fix that yellow warning bar by running the scheduler and webserver together.
+
+# Here is your updated **`docker-compose.yml`** with the cleaned-up volumes and the correct command to see your DAGs from the `pipeline/dags` folder:
+# ```yaml
 services:
   postgres:
     image: postgres:13
@@ -20,8 +32,14 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:password@postgres/omnihub
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+      - PYTHONPATH=/opt/airflow/scripts  # Add this line to include the scripts directory in the PYTHONPATH
+    
+   
     volumes:
       - ./pipeline/dags:/opt/airflow/dags
+      - ./pipeline/scripts:/opt/airflow/scripts  # Add this line
       - ./storage:/opt/airflow/storage
     ports:
       - "8081:8080"
@@ -29,7 +47,8 @@ services:
       - postgres
     networks:
       - omni_network
-    command: webserver
+    # 'standalone' runs webserver and scheduler in one container
+    command: standalone 
 
   frontend_admin:
     build: ./frontend-admin

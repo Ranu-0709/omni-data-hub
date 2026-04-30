@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:13
+    container_name: omni_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: omnihub
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - omni_network
+
+  airflow:
+    image: apache/airflow:2.6.0
+    container_name: omni_airflow
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:password@postgres/omnihub
+    volumes:
+      - ./pipeline/dags:/opt/airflow/dags
+      - ./storage:/opt/airflow/storage
+      - ${AIRFLOW_PROJ_DIR:-.}/pipeline/dags:/opt/airflow/dags
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+    networks:
+      - omni_network
+    command: webserver
+
+  frontend_admin:
+    build: ./frontend-admin
+    container_name: omni_admin_ui
+    ports:
+      - "80:3000"
+    depends_on:
+      - postgres
+    networks:
+      - omni_network
+
+networks:
+  omni_network:
+    driver: bridge

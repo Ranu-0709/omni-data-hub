@@ -1,113 +1,116 @@
-"""
-Airflow DAG — Daily Load Job
-Runs the ETL processor to ingest landing-zone files into the Postgres warehouse.
-
-Schedule: daily at 02:00 UTC (07:30 IST)
-Tasks:
-  load_dimensions → process_franchise_a ─┐
-                  → process_franchise_b ─┤→ log_summary
-"""
-
 import sys
 import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
+from airflow.decorators import task
 
-# Make etl_processor importable (mounted at /opt/airflow/scripts in Docker)
+# Add scripts folder to path so we can import our engine and loaders
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from etl_processor import (
     get_engine,
-    load_dim_product,
-    load_dim_customer,
-    load_dim_store,
-    load_dim_hub,
-    load_dim_date,
-    process_franchise_a,
-    process_franchise_b,
+    load_dim_product_gcs,
+    load_dim_customer_gcs,
+    process_gcs_file,
     log,
 )
 from sqlalchemy import text
 
-# ── DAG Config ──────────────────────────────────
+# ── Configuration ────────────────────────────────
+BUCKET_NAME = "omni-franchise-data-hub"
+# Add your franchise folder names here
+FRANCHISES = ['franchise_A', 'franchise_B']
 
 DEFAULT_ARGS = {
     "owner": "data-engineering",
-    "depends_on_past": False,
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
-    "email_on_failure": False,
 }
-
 
 # ── Task Callables ──────────────────────────────
 
 def _load_dimensions(**ctx):
+    """Refreshes dimension tables from master data in GCS."""
     engine = get_engine()
-    load_dim_product(engine)
-    load_dim_customer(engine)
-    load_dim_store(engine)
-    load_dim_hub(engine)
-    load_dim_date(engine)
-    log.info("All dimensions loaded.")
+    # Note: We now pass the BUCKET_NAME to our new GCS-aware loaders
+    load_dim_product_gcs(engine, BUCKET_NAME)
+    load_dim_customer_gcs(engine, BUCKET_NAME)
+    log.info("Dimension tables refreshed from GCS.")
 
+@task
+def process_gcs_franchise(franchise_id):
+    """
+    Dynamically maps across franchises, listing and processing 
+    files from GCS landed/ folders.
+    """
+    hook = GCSHook(gcp_conn_id='google_cloud_default')
+    engine = get_engine()
+    
+    # Path inside your bucket: landed/franchise_A/, etc.
+    prefix = f'landed/{franchise_id}/'
+    files = hook.list(bucket_name=BUCKET_NAME, prefix=prefix)
+    
+    if not files:
+        log.info(f"No new files found for {franchise_id}.")
+        return
 
-def _process_franchise_a(**ctx):
-    process_franchise_a(get_engine())
+    for file_name in files:
+        # We only want data files, not folder markers
+        if file_name.endswith(('.csv', '.psv')):
+            # 1. Idempotency Check: Don't reload if the filename is in sales_fact
+            with engine.connect() as conn:
+                check_sql = text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1")
+                already_loaded = conn.execute(check_sql, {"f": os.path.basename(file_name)}).fetchone()
+                
+                if already_loaded:
+                    log.info(f"Skip already loaded: {file_name}")
+                    continue
 
-
-def _process_franchise_b(**ctx):
-    process_franchise_b(get_engine())
-
+            # 2. Process the file (now streaming from GCS to memory)
+            process_gcs_file(engine, BUCKET_NAME, file_name, franchise_id)
+            
+            # 3. Archive: Move to 'archived/' and delete from 'landed/'
+            archive_name = file_name.replace('landed/', 'archived/')
+            hook.copy(source_bucket=BUCKET_NAME, source_object=file_name, 
+                      destination_object=archive_name)
+            hook.delete(bucket_name=BUCKET_NAME, object_name=file_name)
 
 def _log_summary(**ctx):
+    """Final summary log of the data warehouse state."""
     engine = get_engine()
     with engine.connect() as conn:
         facts = conn.execute(text("SELECT COUNT(*) FROM sales_fact")).scalar()
-        errors = conn.execute(text("SELECT COUNT(*) FROM error_log")).scalar()
-        today_facts = conn.execute(
-            text("SELECT COUNT(*) FROM sales_fact WHERE loaded_at::date = CURRENT_DATE")
-        ).scalar()
-        today_errors = conn.execute(
-            text("SELECT COUNT(*) FROM error_log WHERE detected_at::date = CURRENT_DATE")
-        ).scalar()
-    log.info(f"Today: {today_facts:,} loaded, {today_errors:,} quarantined")
-    log.info(f"Total: {facts:,} facts, {errors:,} errors")
-
+    log.info(f"ETL Cycle Complete. Total facts in warehouse: {facts:,}")
 
 # ── DAG Definition ──────────────────────────────
 
 with DAG(
     dag_id="daily_load_job",
     default_args=DEFAULT_ARGS,
-    description="Ingest landing-zone CSV/PSV files into the Omni Data Hub warehouse",
-    schedule_interval="0 2 * * *",  # 02:00 UTC daily
+    schedule_interval="0 2 * * *", # 07:30 IST
     start_date=datetime(2025, 4, 1),
     catchup=False,
-    tags=["omni-data-hub", "etl"],
+    tags=["omni-data-hub", "gcs-cloud"],
 ) as dag:
 
+    # Task 1: Update Dimension Tables
     t_dims = PythonOperator(
         task_id="load_dimensions",
         python_callable=_load_dimensions,
     )
 
-    t_fa = PythonOperator(
-        task_id="process_franchise_a",
-        python_callable=_process_franchise_a,
-    )
+    # Task 2: Process Franchises (Dynamic Task Mapping)
+    # This creates parallel sub-tasks for each franchise in the list
+    t_process = process_gcs_franchise.expand(franchise_id=FRANCHISES)
 
-    t_fb = PythonOperator(
-        task_id="process_franchise_b",
-        python_callable=_process_franchise_b,
-    )
-
+    # Task 3: Final Log
     t_summary = PythonOperator(
         task_id="log_summary",
         python_callable=_log_summary,
     )
 
-    # Dimensions first, then both franchises in parallel, then summary
-    t_dims >> [t_fa, t_fb] >> t_summary
+    # Flow: Dimensions -> [Franchise A, Franchise B, ...] -> Summary
+    t_dims >> t_process >> t_summary

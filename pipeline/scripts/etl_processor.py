@@ -1,27 +1,24 @@
 """
-ETL Processor — Omni Data Hub
-Loads landing-zone files → validates → enriches → writes to Postgres.
-Compatible with SQLAlchemy 1.4 (Required for Airflow 2.6.0).
+ETL Processor — Omni Data Hub (GCS Cloud Edition)
+Streams data from GCS -> Validates -> Enriches -> Writes to Postgres.
+Compatible with SQLAlchemy 1.4 and Airflow 2.6.0.
 """
 
 import os
-import glob
+import io
 import json
 import logging
 import pandas as pd
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from airflow.providers.google.cloud.hooks.gcs import GCSHook
 
 # ── Config ──────────────────────────────────────
 
-load_dotenv()
-
+# Database URL using environment variables for security
 DB_URL = (
     f"postgresql+psycopg2://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}"
     f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
 )
-
-LANDING = os.getenv("LANDING_ZONE_PATH", "./data_generator/storage/landing_zone")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -29,27 +26,25 @@ log = logging.getLogger(__name__)
 # ── Helpers ─────────────────────────────────────
 
 def get_engine():
+    """Returns a SQLAlchemy engine with connection pooling."""
     return create_engine(DB_URL, pool_pre_ping=True)
 
 def upsert_df(df: pd.DataFrame, table: str, key: str, engine):
-    """SQLAlchemy 1.4 compatible upsert."""
+    """SQLAlchemy 1.4 compatible upsert to prevent duplicates in dimensions."""
     try:
-        # In SQLAlchemy 1.4, pandas can use the engine directly for both
         existing = pd.read_sql(f"SELECT {key} FROM {table}", engine)
     except Exception:
-        # If table doesn't exist, treat as empty
         existing = pd.DataFrame(columns=[key])
 
     new = df[~df[key].isin(existing[key])]
     
     if len(new):
-        # engine is accepted here in 1.4 and older pandas
         new.to_sql(table, engine, if_exists="append", index=False, method="multi")
         
-    log.info(f"  {table}: {len(new)} new / {len(df)} total")
+    log.info(f"  {table}: {len(new)} new records added.")
 
 def quarantine(df: pd.DataFrame, mask: pd.Series, rule: str, franchise: str, source: str, engine):
-    """Flag bad rows and write to error_log."""
+    """Flag bad rows and write to error_log in the database."""
     bad = df[mask]
     if len(bad):
         errors = pd.DataFrame({
@@ -61,108 +56,55 @@ def quarantine(df: pd.DataFrame, mask: pd.Series, rule: str, franchise: str, sou
         errors.to_sql("error_log", engine, if_exists="append", index=False, method="multi")
     return df[~mask]
 
-# ── Dimension Loaders ───────────────────────────
+# ── GCS Dimension Loaders ────────────────────────
 
-def load_dim_product(engine):
-    path = os.path.join(LANDING, "master_company", "product_master.csv")
-    if not os.path.exists(path):
-        log.warning(f"File not found: {path}")
-        return
-    df = pd.read_csv(path, encoding="utf-8-sig")
+def load_dim_product_gcs(engine, bucket_name):
+    hook = GCSHook(gcp_conn_id='google_cloud_default')
+    content = hook.download(bucket_name=bucket_name, object_name="master_company/product_master.csv")
+    df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
     cols = ["sku_code", "ean_barcode", "product_name", "brand", "category",
             "sub_category", "size", "color", "fabric", "mrp", "hsn_code", "gst_pct"]
     upsert_df(df[cols], "dim_product", "sku_code", engine)
 
-
-
-
-def load_dim_customer(engine):
-    path = os.path.join(LANDING, "master_company", "customer_master.csv")
-    df = pd.read_csv(path, encoding="utf-8-sig")
+def load_dim_customer_gcs(engine, bucket_name):
+    hook = GCSHook(gcp_conn_id='google_cloud_default')
+    content = hook.download(bucket_name=bucket_name, object_name="master_company/customer_master.csv")
+    df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
     upsert_df(df, "dim_customer", "customer_id", engine)
 
+# ── Unified GCS Franchise Processor ──────────────
 
-def load_dim_store(engine):
-    path = os.path.join(LANDING, "franchise_a", "storemaster_monthly_refresh.csv")
-    df = pd.read_csv(path, encoding="utf-8-sig")
-    upsert_df(df, "dim_store", "store_code", engine)
-
-
-def load_dim_hub(engine):
-    path = os.path.join(LANDING, "franchise_b", "hubmaster_weekly_refresh.psv")
-    df = pd.read_csv(path, sep="|", encoding="utf-8-sig")
-    upsert_df(df, "dim_hub", "hub_id", engine)
-
-
-def load_dim_date(engine):
-    """Populate calendar dimension for FY 25-26 + buffer."""
-    dates = pd.date_range("2025-01-01", "2027-03-31")
-    df = pd.DataFrame({
-        "date_key": dates,
-        "year": dates.year,
-        "month": dates.month,
-        "day": dates.day,
-        "quarter": dates.quarter,
-        "day_of_week": dates.dayofweek,
-        "month_name": dates.strftime("%B"),
-        "is_weekend": dates.dayofweek >= 5,
-    })
-    upsert_df(df, "dim_date", "date_key", engine)
-
-
-# ── Franchise A ETL ─────────────────────────────
-
-def _already_loaded(source_file: str, engine) -> bool:
-    result = engine.execute(
-        text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1"),
-        {"f": source_file},
-    )
-    return result.fetchone() is not None
-
-
-def process_franchise_a(engine):
-    log.info("=== Franchise A ===")
+def process_gcs_file(engine, bucket_name, object_name, franchise_id):
+    """
+    Core Logic: Streams a file from GCS, cleans data types, 
+    applies business rules, and loads to the sales_fact table.
+    """
+    hook = GCSHook(gcp_conn_id='google_cloud_default')
+    fname = os.path.basename(object_name)
     
-    # --- 1. INITIALIZATION (Crucial Fix) ---
-    # We force-create the table schema if it's missing BEFORE the loop starts.
-    # This ensures the 'SELECT 1 FROM sales_fact' query doesn't crash on the first run.
-    pd.DataFrame(columns=[
-        "franchise_id", "transaction_date", "sku_code", "store_or_hub_id",
-        "quantity", "selling_price", "customer_id", "status", "source_file"
-    ]).to_sql("sales_fact", engine, if_exists="append", index=False)
-
-    valid_skus = set(pd.read_sql("SELECT sku_code FROM dim_product", engine)["sku_code"])
-    now = pd.Timestamp.now()
-
-    files = sorted(glob.glob(os.path.join(LANDING, "franchise_a", "sales_*.csv")))
+    # 1. Download to memory buffer
+    content = hook.download(bucket_name=bucket_name, object_name=object_name)
     
-    for fpath in files:
-        fname = os.path.basename(fpath)
-        with engine.connect() as conn:
-            # This query now works because the table was initialized above
-            check_sql = text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1")
-            if conn.execute(check_sql, {"f": fname}).fetchone():
-                log.info(f"   SKIP (already loaded): {fname}")
-                continue
+    # 2. Load into Pandas (Handle CSV or PSV based on extension)
+    sep = "|" if object_name.endswith('.psv') else ","
+    df = pd.read_csv(io.BytesIO(content), sep=sep, encoding="utf-8-sig")
+    initial_count = len(df)
 
-        df = pd.read_csv(fpath, encoding="utf-8-sig")
-        # Numeric conversion to prevent TypeError
+    # 3. Numeric & Date Conversion
+    if franchise_id == "A":
         df["unit_price"] = pd.to_numeric(df["unit_price"], errors='coerce')
         df["quantity"] = pd.to_numeric(df["quantity"], errors='coerce')
-
-        #df["transaction_timestamp"] = pd.to_datetime(df["transaction_timestamp"])
         df["transaction_timestamp"] = pd.to_datetime(df["transaction_timestamp"], errors='coerce')
-        initial = len(df)
+    else:
+        df["mrp_price"] = pd.to_numeric(df["mrp_price"], errors='coerce')
+        df["units_sold"] = pd.to_numeric(df["units_sold"], errors='coerce')
+        df["delivery_timestamp"] = pd.to_datetime(df["delivery_timestamp"], errors='coerce')
 
-        # Quarantine Logic
-        
+    # 4. Quarantine Logic (Example for Franchise A)
+    if franchise_id == "A":
         df = quarantine(df, df["unit_price"].isna() | (df["unit_price"] <= 0), "A1", "A", fname, engine)
-        df = quarantine(df, df["quantity"].abs() > 100, "A2", "A", fname, engine)
-        #df = quarantine(df, df["transaction_timestamp"] > now, "A3", "A", fname, engine)
         df = quarantine(df, df["transaction_timestamp"].isna(), "A0", "A", fname, engine)
-        df = quarantine(df, ~df["sku_code"].isin(valid_skus), "A4", "A", fname, engine)
-
-        # Map to fact schema
+        
         fact = pd.DataFrame({
             "franchise_id": "A",
             "transaction_date": df["transaction_timestamp"],
@@ -170,108 +112,25 @@ def process_franchise_a(engine):
             "store_or_hub_id": df["store_code"],
             "quantity": df["quantity"],
             "selling_price": df["unit_price"],
-            "customer_id": df["customer_id"].replace("", None),
+            "customer_id": df["customer_id"],
             "status": df["transaction_type"],
-            "source_file": fname,
+            "source_file": fname
         })
-        
-        fact.to_sql("sales_fact", engine, if_exists="append", index=False, method="multi")
-        log.info(f"   {fname}: {len(fact)} loaded / {initial - len(fact)} quarantined")
-
-# ── Franchise B ETL ─────────────────────────────
-
-def process_franchise_b(engine):
-    log.info("=== Franchise B ===")
-
-    # Load barcode mapping
-    map_path = os.path.join(LANDING, "franchise_b", "barcode_sku_mapping.psv")
-    if not os.path.exists(map_path):
-        log.warning(f"Barcode map not found: {map_path}")
-        return
-        
-    bmap = pd.read_csv(map_path, sep="|", encoding="utf-8-sig")
-    active_barcodes = set(bmap.loc[bmap["is_active"] == 1, "item_barcode"])
-    barcode_to_sku = bmap.loc[bmap["is_active"] == 1].drop_duplicates("item_barcode").set_index("item_barcode")["sku_code"]
-
-    now = pd.Timestamp.now()
-
-    files = sorted(glob.glob(os.path.join(LANDING, "franchise_b", "sales_*.psv")))
-    for fpath in files:
-        fname = os.path.basename(fpath)
-        with engine.connect() as conn:
-            if conn.execute(text("SELECT 1 FROM sales_fact WHERE source_file = :f LIMIT 1"), {"f": fname}).fetchone():
-                log.info(f"   SKIP (already loaded): {fname}")
-                continue
-
-        # Load PSV
-        df = pd.read_csv(fpath, sep="|", encoding="utf-8-sig")
-        
-        # --- NEW: CRITICAL NUMERIC CONVERSIONS ---
-        # This prevents the "TypeError: '<=' not supported between instances of 'str' and 'int'"
-        df["mrp_price"] = pd.to_numeric(df["mrp_price"], errors='coerce')
-        df["discount_applied"] = pd.to_numeric(df["discount_applied"], errors='coerce')
-        df["units_sold"] = pd.to_numeric(df["units_sold"], errors='coerce')
-        # ----------------------------------------
-
-        # Fix Date Error: coerce bad dates to NaT
-       
-        df["delivery_timestamp"] = pd.to_datetime(df["delivery_timestamp"], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-        initial = len(df)
-
-        # Quarantine Logic
-        # Now these comparisons will work because the data types are numeric
-        df = quarantine(df, df["mrp_price"].isna() | (df["mrp_price"] <= 0), "B1", "B", fname, engine)
-        df = quarantine(df, (df["discount_applied"] < 0) | (df["discount_applied"] > df["mrp_price"]), "B2", "B", fname, engine)
-        df = quarantine(df, df["delivery_timestamp"].isna(), "B0", "B", fname, engine)
-        df = quarantine(df, df.duplicated(subset="order_uuid", keep=False), "B4", "B", fname, engine)
-        df = quarantine(df, ~df["item_barcode"].isin(active_barcodes), "B5", "B", fname, engine)
-
-        # Barcode → SKU mapping
-        df["sku_code"] = df["item_barcode"].map(barcode_to_sku)
-
-        # Net price calculation
-        df["net_price"] = df["mrp_price"] - df["discount_applied"]
-
-        # Map to fact schema
+    else:
+        # Business logic for Franchise B
+        df["net_price"] = df["mrp_price"] - pd.to_numeric(df.get("discount_applied", 0), errors='coerce')
         fact = pd.DataFrame({
             "franchise_id": "B",
             "transaction_date": df["delivery_timestamp"],
-            "sku_code": df["sku_code"],
+            "sku_code": df.get("sku_code"), # Assumes mapping was done or barcode is sku
             "store_or_hub_id": df["hub_id"],
             "quantity": df["units_sold"],
             "selling_price": df["net_price"],
             "customer_id": None,
             "status": df["status"],
-            "source_file": fname,
+            "source_file": fname
         })
-        
-        fact.to_sql("sales_fact", engine, if_exists="append", index=False, method="multi")
-        log.info(f"   {fname}: {len(fact)} loaded / {initial - len(fact)} quarantined")
 
-# ── Main ────────────────────────────────────────
-
-def run():
-    engine = get_engine()
-    log.info("Starting ETL Process (SQLAlchemy 1.4 Mode)...")
-    
-    log.info("Loading dimensions...")
-    load_dim_product(engine)
-    # Add other loaders here (load_dim_customer, etc.) as needed
-    load_dim_customer(engine)
-    load_dim_store(engine)
-    load_dim_hub(engine)
-    load_dim_date(engine)
-
-    log.info("Processing sales...")
-    process_franchise_a(engine)
-    process_franchise_b(engine)
-
-    # Summary
-    with engine.connect() as conn:
-        fact_count = conn.execute(text("SELECT COUNT(*) FROM sales_fact")).scalar()
-        err_count = conn.execute(text("SELECT COUNT(*) FROM error_log")).scalar()
-    log.info(f"=== Done. sales_fact={fact_count:,}  error_log={err_count:,} ===")
-    log.info("ETL Cycle Complete.")
-
-if __name__ == "__main__":
-    run()
+    # 5. Final Load
+    fact.to_sql("sales_fact", engine, if_exists="append", index=False, method="multi")
+    log.info(f"  {fname}: {len(fact)} loaded / {initial_count - len(fact)} quarantined")
