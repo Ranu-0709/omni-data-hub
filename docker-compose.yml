@@ -36,6 +36,9 @@ services:
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
       - PYTHONPATH=/opt/airflow/scripts  # Add this line to include the scripts directory in the PYTHONPATH
     
+    env_file:
+      - .env
+    
    
     volumes:
       - ./pipeline/dags:/opt/airflow/dags

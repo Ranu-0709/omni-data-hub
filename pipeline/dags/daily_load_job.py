@@ -20,9 +20,9 @@ from etl_processor import (
 from sqlalchemy import text
 
 # ── Configuration ────────────────────────────────
-BUCKET_NAME = "omni-franchise-data-hub"
+BUCKET_NAME = "omni-data-hub-landing-zone-ranu"
 # Add your franchise folder names here
-FRANCHISES = ['franchise_A', 'franchise_B']
+FRANCHISES = ['franchise-1', 'franchise-2']
 
 DEFAULT_ARGS = {
     "owner": "data-engineering",
@@ -50,7 +50,8 @@ def process_gcs_franchise(franchise_id):
     engine = get_engine()
     
     # Path inside your bucket: landed/franchise_A/, etc.
-    prefix = f'landed/{franchise_id}/'
+    prefix = f'{franchise_id}/'
+    #prefix = f'landed/{franchise_id}/'
     files = hook.list(bucket_name=BUCKET_NAME, prefix=prefix)
     
     if not files:
@@ -93,7 +94,7 @@ with DAG(
     schedule_interval="0 2 * * *", # 07:30 IST
     start_date=datetime(2025, 4, 1),
     catchup=False,
-    tags=["omni-data-hub", "gcs-cloud"],
+    tags=["omni-data-hub-landing-zone-ranu", "gcs-cloud"],
 ) as dag:
 
     # Task 1: Update Dimension Tables

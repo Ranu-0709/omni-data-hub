@@ -4,7 +4,7 @@
 -- ── Dimension Tables ──
 
 CREATE TABLE IF NOT EXISTS dim_product (
-    sku_code       VARCHAR(20) PRIMARaY KEY,
+    sku_code       VARCHAR(20) PRIMARY KEY,
     ean_barcode    BIGINT,
     product_name   TEXT,
     brand          VARCHAR(50),
