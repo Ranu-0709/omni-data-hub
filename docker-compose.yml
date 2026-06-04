@@ -26,6 +26,31 @@ services:
     networks:
       - omni_network
 
+  pgadmin:
+    container_name: omni_pgadmin
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "8082:80"
+      #- "8080:80"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    networks:
+      - omni_network
+
+  backend:
+    build: ./backend
+    container_name: omni_backend
+    ports:
+      - "8000:8000"
+    networks:
+      - omni_network
+    depends_on:
+      - postgres
   airflow:
     image: apache/airflow:2.6.0
     container_name: omni_airflow
@@ -66,3 +91,4 @@ services:
 networks:
   omni_network:
     driver: bridge
+
